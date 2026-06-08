@@ -49,15 +49,27 @@ const MAX_USERS = 2;
 const users = new Map();
 
 io.on('connection', (socket) => {
-  if (users.size >= MAX_USERS) {
-    socket.emit('error-full', 'Room is full. Only 2 users allowed.');
-    socket.disconnect();
-    return;
-  }
-
   console.log(`User connected: ${socket.id}`);
 
   socket.on('register', (userName) => {
+    // Kick any stale/ghost socket registered under the same name (reconnect,
+    // app backgrounded, WiFi drop). This frees the slot the real device needs.
+    for (const [id, user] of users) {
+      if (id !== socket.id && user.name === userName) {
+        const stale = io.sockets.sockets.get(id);
+        users.delete(id);
+        if (stale) stale.disconnect(true);
+        console.log(`Removed stale socket for ${userName} (${id})`);
+      }
+    }
+
+    // Enforce the 2-user cap only after deduping, so ghosts can't lock anyone out.
+    if (!users.has(socket.id) && users.size >= MAX_USERS) {
+      socket.emit('error-full', 'Room is full. Only 2 users allowed.');
+      socket.disconnect(true);
+      return;
+    }
+
     users.set(socket.id, { name: userName, typing: false });
     console.log(`Registered: ${userName} (${socket.id})`);
 
