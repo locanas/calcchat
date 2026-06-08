@@ -1,9 +1,44 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { Server } = require('socket.io');
 
+const MIME = {
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.js': 'application/javascript',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+};
+
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('AndroidCalc server running');
+  const filePath = req.url === '/' ? '/index.html' : req.url;
+  const fullPath = path.join(__dirname, 'public', filePath);
+  const ext = path.extname(fullPath);
+
+  if (ext && MIME[ext]) {
+    fs.readFile(fullPath, (err, data) => {
+      if (err) {
+        res.writeHead(404);
+        res.end('Not found');
+      } else {
+        res.writeHead(200, { 'Content-Type': MIME[ext] });
+        res.end(data);
+      }
+    });
+  } else {
+    // Fallback: serve index.html for SPA
+    fs.readFile(path.join(__dirname, 'public', 'index.html'), (err, data) => {
+      if (err) {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('AndroidCalc server running');
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(data);
+      }
+    });
+  }
 });
 
 const io = new Server(server, {

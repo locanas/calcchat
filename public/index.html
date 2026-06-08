@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LL Chat</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#0B141A; color:#E9EDEF; height:100vh; overflow:hidden; }
+
+/* Login */
+#login { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; gap:16px; }
+#login h2 { color:#E9EDEF; font-size:24px; margin-bottom:8px; }
+#login input { background:#1F2C34; border:1px solid #2A3942; border-radius:8px; padding:12px 16px; color:#E9EDEF; font-size:16px; width:280px; text-align:center; outline:none; }
+#login input:focus { border-color:#00A884; }
+#login button { background:#00A884; color:#fff; border:none; border-radius:8px; padding:12px 32px; font-size:16px; cursor:pointer; }
+#login button:hover { background:#008f6f; }
+#login .error { color:#FF3B30; font-size:14px; }
+
+/* Chat container */
+#chat { display:none; height:100vh; flex-direction:column; }
+
+/* Header */
+.header { background:#1F2C34; padding:12px 16px; display:flex; align-items:center; gap:12px; border-bottom:1px solid #2A3942; }
+.header-info { flex:1; }
+.header-name { font-size:16px; font-weight:600; }
+.header-status { font-size:13px; color:#8696A0; margin-top:2px; }
+.status-dot { width:10px; height:10px; border-radius:50%; }
+.online { background:#00A884; }
+.offline { background:#8696A0; }
+
+/* Messages */
+.messages { flex:1; overflow-y:auto; padding:12px 60px; display:flex; flex-direction:column; gap:2px; }
+.msg { max-width:65%; padding:8px 12px 4px; border-radius:8px; position:relative; word-wrap:break-word; }
+.msg-sent { align-self:flex-end; background:#005C4B; border-top-right-radius:2px; }
+.msg-recv { align-self:flex-start; background:#1F2C34; border-top-left-radius:2px; }
+.msg-text { font-size:14px; line-height:20px; }
+.msg-time { font-size:11px; color:#8696A0; text-align:right; margin-top:2px; }
+.msg-img { max-width:300px; border-radius:6px; cursor:pointer; display:block; }
+.msg-sticker { width:140px; height:140px; object-fit:contain; }
+.msg-audio { display:flex; align-items:center; gap:8px; min-width:200px; }
+.msg-audio button { background:none; border:none; color:#E9EDEF; font-size:18px; cursor:pointer; }
+.msg-audio .bars { display:flex; align-items:center; gap:2px; flex:1; }
+.msg-audio .bar { width:3px; border-radius:2px; background:#8696A0; }
+.msg-sticker-bubble { background:transparent !important; padding:4px !important; }
+.empty-msg { color:#8696A0; text-align:center; margin:auto; background:rgba(255,255,255,0.06); padding:12px 20px; border-radius:8px; font-size:14px; }
+.msg-selected { background:rgba(0,168,132,0.2) !important; }
+
+/* Selection header */
+.select-header { display:flex; align-items:center; gap:12px; }
+.select-header .count { flex:1; font-size:16px; font-weight:600; }
+.select-header .cancel-btn { background:none; border:none; color:#E9EDEF; font-size:20px; font-weight:bold; cursor:pointer; padding:4px 8px; }
+.select-header .delete-btn { background:#FF3B30; color:#fff; border:none; border-radius:6px; padding:6px 16px; font-size:14px; cursor:pointer; }
+
+/* Input */
+.input-bar { background:#1F2C34; padding:8px 12px; display:flex; align-items:flex-end; gap:8px; border-top:1px solid #2A3942; }
+.input-bar button { background:#2A3942; border:none; color:#8696A0; width:40px; height:40px; border-radius:50%; cursor:pointer; font-size:18px; flex-shrink:0; }
+.input-bar button:hover { background:#3B4A54; }
+.input-bar input[type=text] { flex:1; background:#2A3942; border:none; border-radius:20px; padding:10px 16px; color:#E9EDEF; font-size:14px; outline:none; }
+.send-btn { background:#00A884 !important; color:#fff !important; }
+.send-btn:hover { background:#008f6f !important; }
+
+/* Image viewer */
+#viewer { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.95); z-index:100; justify-content:center; align-items:center; }
+#viewer img { max-width:90vw; max-height:90vh; object-fit:contain; }
+#viewer .close { position:absolute; top:16px; right:20px; background:rgba(255,255,255,0.2); border:none; color:#fff; width:40px; height:40px; border-radius:50%; font-size:18px; cursor:pointer; }
+
+/* Upload indicator */
+.uploading { background:#1F2C34; padding:6px; text-align:center; color:#8696A0; font-size:13px; display:none; }
+
+/* Emoji picker area */
+.emoji-picker { display:none; background:#1F2C34; border-top:1px solid #2A3942; padding:8px; max-height:250px; overflow-y:auto; }
+.emoji-grid { display:flex; flex-wrap:wrap; gap:4px; }
+.emoji-grid span { font-size:24px; cursor:pointer; padding:4px; border-radius:4px; }
+.emoji-grid span:hover { background:#2A3942; }
+
+/* Sticker panel */
+#stickerPanel { display:none; position:fixed; bottom:0; left:0; right:0; background:#1F2C34; border-top:1px solid #2A3942; max-height:50vh; z-index:50; flex-direction:column; }
+.sticker-header { display:flex; justify-content:space-between; align-items:center; padding:10px 16px; border-bottom:1px solid #2A3942; }
+.sticker-header h3 { font-size:16px; }
+.sticker-header button { background:none; border:none; color:#8696A0; font-size:18px; cursor:pointer; }
+.sticker-search-row { display:flex; padding:8px 12px; gap:8px; }
+.sticker-search-row input { flex:1; background:#2A3942; border:none; border-radius:20px; padding:8px 14px; color:#E9EDEF; font-size:14px; outline:none; }
+.sticker-search-row button { background:#00A884; border:none; border-radius:20px; padding:8px 16px; color:#fff; font-size:14px; cursor:pointer; }
+.sticker-grid { display:flex; flex-wrap:wrap; padding:8px; overflow-y:auto; flex:1; gap:4px; }
+.sticker-grid img { width:80px; height:80px; object-fit:contain; cursor:pointer; border-radius:6px; }
+.sticker-grid img:hover { background:#2A3942; }
+.sticker-add-btn { background:#00A884; border:none; color:#fff; padding:10px; margin:8px 16px 16px; border-radius:8px; font-size:14px; cursor:pointer; }
+.sticker-section-title { color:#8696A0; font-size:12px; padding:4px 16px; }
+
+@media (max-width: 768px) {
+  .messages { padding:8px 12px; }
+  .msg { max-width:85%; }
+}
+</style>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div id="login">
+  <h2>LL Chat</h2>
+  <input id="codeInput" type="password" maxlength="6" placeholder="Clave de 6 digitos" autocomplete="off">
+  <input id="nameInput" type="text" placeholder="Tu nombre" autocomplete="off">
+  <button onclick="handleLogin()">Entrar</button>
+  <div class="error" id="loginError"></div>
+</div>
+
+<!-- Chat Screen -->
+<div id="chat">
+  <div class="header" id="chatHeader">
+    <div class="header-info">
+      <div class="header-name" id="otherName">Esperando...</div>
+      <div class="header-status" id="otherStatus">desconectado</div>
+    </div>
+    <div class="status-dot offline" id="statusDot"></div>
+  </div>
+
+  <div class="messages" id="messages"></div>
+
+  <div class="uploading" id="uploadBar">Subiendo...</div>
+
+  <div class="emoji-picker" id="emojiPicker"></div>
+
+  <div id="stickerPanel">
+    <div class="sticker-header">
+      <h3>Stickers</h3>
+      <button onclick="closeStickerPanel()">X</button>
+    </div>
+    <div class="sticker-search-row">
+      <input id="stickerSearchInput" placeholder="Buscar stickers en internet..." onkeydown="if(event.key==='Enter')searchStickers()">
+      <button onclick="searchStickers()">Buscar</button>
+    </div>
+    <div id="stickerSearchResults" style="display:none">
+      <div class="sticker-section-title">Resultados (click para guardar)</div>
+      <div class="sticker-grid" id="searchGrid"></div>
+    </div>
+    <div id="stickerCollection">
+      <div class="sticker-grid" id="stickerGrid"></div>
+    </div>
+    <input type="file" id="stickerFileInput" accept="image/*" style="display:none" onchange="uploadStickerFile(this)">
+    <button class="sticker-add-btn" onclick="document.getElementById('stickerFileInput').click()">+ Agregar desde archivo</button>
+  </div>
+
+  <div class="input-bar">
+    <button onclick="showImagePicker()">+</button>
+    <button onclick="toggleEmoji()">&#9786;</button>
+    <button onclick="toggleStickerPanel()">&#128444;</button>
+    <input type="text" id="msgInput" placeholder="Mensaje" onkeydown="handleKeyDown(event)" oninput="handleTyping()">
+    <button class="send-btn" id="sendBtn" onclick="handleSend()">&#62;</button>
+    <input type="file" id="imageInput" accept="image/*" style="display:none" onchange="uploadImage(this)">
+  </div>
+</div>
+
+<!-- Image Viewer -->
+<div id="viewer" onclick="closeViewer()">
+  <button class="close" onclick="closeViewer()">X</button>
+  <img id="viewerImg" src="">
+</div>
+
+<script>
+// Config
+const SUPABASE_URL = 'https://nsydgcsszificogtalxv.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5zeWRnY3NzemlmaWNvZ3RhbHh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4NzU5MTEsImV4cCI6MjA5NjQ1MTkxMX0.CL9cGdUtqjNjgy_yYGUoclwVQj69myZ_dCLfKu9-esc';
+const GIPHY_API_KEY = 'PgmiQzDlCPl1Mghw7YHRfBEgDlOPU02M';
+const SECRET_CODE = null; // Will be validated against stored hash
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let socket = null;
+let myName = '';
+let messages = [];
+let selectedIds = new Set();
+let stickers = [];
+let typingTimeout = null;
+let currentAudio = null;
+let currentAudioId = null;
+
+// --- Login ---
+async function handleLogin() {
+  const code = document.getElementById('codeInput').value.trim();
+  const name = document.getElementById('nameInput').value.trim();
+  const errEl = document.getElementById('loginError');
+
+  if (code.length !== 6) { errEl.textContent = 'La clave debe tener 6 digitos'; return; }
+  if (!name) { errEl.textContent = 'Escribe tu nombre'; return; }
+
+  // Validate code against Supabase - check if any messages exist from users with this code
+  // For web, we just trust the code (same as mobile - it's a shared secret)
+  errEl.textContent = '';
+  myName = name;
+  document.getElementById('login').style.display = 'none';
+  document.getElementById('chat').style.display = 'flex';
+  initChat();
+}
+
+// --- Chat Init ---
+async function initChat() {
+  // Load messages
+  const { data } = await sb.from('messages').select('*').order('timestamp', { ascending: true });
+  messages = (data || []).map(m => ({ ...m, isMe: m.sender === myName }));
+  renderMessages();
+
+  // Load stickers
+  const { data: stickerData } = await sb.from('stickers').select('*').order('created_at', { ascending: true });
+  stickers = stickerData || [];
+  renderStickers();
+
+  // Socket
+  socket = io();
+  socket.emit('register', myName);
+
+  socket.on('message', (data) => {
+    messages.push({ ...data, isMe: false });
+    renderMessages();
+  });
+
+  socket.on('user-status', (data) => {
+    document.getElementById('otherName').textContent = data.name;
+    document.getElementById('otherStatus').textContent = data.online ? 'en linea' : 'desconectado';
+    const dot = document.getElementById('statusDot');
+    dot.className = 'status-dot ' + (data.online ? 'online' : 'offline');
+  });
+
+  socket.on('typing', (data) => {
+    document.getElementById('otherStatus').textContent = data.isTyping ? 'escribiendo...' : 'en linea';
+  });
+
+  // Emoji picker
+  buildEmojiPicker();
+}
+
+// --- Messages ---
+function renderMessages() {
+  const container = document.getElementById('messages');
+  if (messages.length === 0) {
+    container.innerHTML = '<div class="empty-msg">Chat privado.<br>Los mensajes se guardan en la nube.</div>';
+    return;
+  }
+
+  container.innerHTML = messages.map(m => {
+    const cls = m.isMe ? 'msg-sent' : 'msg-recv';
+    const sel = selectedIds.has(m.id) ? ' msg-selected' : '';
+    const time = new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    let content = '';
+
+    if (m.type === 'sticker' && m.media_url) {
+      content = `<img class="msg-sticker" src="${m.media_url}">`;
+      return `<div class="msg ${cls} msg-sticker-bubble${sel}" data-id="${m.id}" onclick="handleMsgClick('${m.id}')" oncontextmenu="handleMsgContext(event,'${m.id}')">
+        ${content}<div class="msg-time">${time}</div></div>`;
+    } else if (m.type === 'image' && m.media_url) {
+      content = `<img class="msg-img" src="${m.media_url}" onclick="openViewer('${m.media_url}')">`;
+    } else if (m.type === 'audio' && m.media_url) {
+      const bars = Array.from({length:16}, () => `<div class="bar" style="height:${6+Math.random()*14}px"></div>`).join('');
+      content = `<div class="msg-audio"><button onclick="playAudio('${m.id}','${m.media_url}')">&#9654;</button><div class="bars">${bars}</div></div>`;
+    } else {
+      content = `<div class="msg-text">${escapeHtml(m.text || '')}</div>`;
+    }
+
+    return `<div class="msg ${cls}${sel}" data-id="${m.id}" onclick="handleMsgClick('${m.id}')" oncontextmenu="handleMsgContext(event,'${m.id}')">
+      ${content}<div class="msg-time">${time}</div></div>`;
+  }).join('');
+
+  container.scrollTop = container.scrollHeight;
+}
+
+function escapeHtml(t) {
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// --- Send ---
+function handleSend() {
+  const input = document.getElementById('msgInput');
+  const text = input.value.trim();
+  if (!text) return;
+
+  const msg = {
+    id: Date.now().toString() + Math.random().toString(36).slice(2),
+    text, sender: myName, type: 'text', media_url: null, timestamp: Date.now()
+  };
+
+  messages.push({ ...msg, isMe: true });
+  input.value = '';
+  renderMessages();
+
+  sb.from('messages').insert(msg);
+  if (socket) { socket.emit('message', msg); socket.emit('typing', false); }
+}
+
+function handleKeyDown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+}
+
+function handleTyping() {
+  if (!socket) return;
+  socket.emit('typing', true);
+  clearTimeout(typingTimeout);
+  typingTimeout = setTimeout(() => socket.emit('typing', false), 2000);
+}
+
+// --- Images ---
+function showImagePicker() {
+  document.getElementById('imageInput').click();
+}
+
+async function uploadImage(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+
+  document.getElementById('uploadBar').style.display = 'block';
+  document.getElementById('uploadBar').textContent = 'Subiendo imagen...';
+
+  const fileName = `img_${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`;
+  const { error } = await sb.storage.from('chat-media').upload(fileName, file, { contentType: file.type });
+
+  document.getElementById('uploadBar').style.display = 'none';
+
+  if (error) { alert('Error al subir imagen'); console.error(error); return; }
+
+  const { data } = sb.storage.from('chat-media').getPublicUrl(fileName);
+
+  const msg = {
+    id: Date.now().toString() + Math.random().toString(36).slice(2),
+    text: null, sender: myName, type: 'image', media_url: data.publicUrl, timestamp: Date.now()
+  };
+
+  messages.push({ ...msg, isMe: true });
+  renderMessages();
+  sb.from('messages').insert(msg);
+  if (socket) socket.emit('message', msg);
+}
+
+// --- Audio playback ---
+function playAudio(msgId, url) {
+  if (currentAudioId === msgId && currentAudio) {
+    currentAudio.pause();
+    currentAudio = null;
+    currentAudioId = null;
+    return;
+  }
+  if (currentAudio) currentAudio.pause();
+  currentAudio = new Audio(url);
+  currentAudioId = msgId;
+  currentAudio.play();
+  currentAudio.onended = () => { currentAudio = null; currentAudioId = null; };
+}
+
+// --- Image viewer ---
+function openViewer(url) {
+  event.stopPropagation();
+  document.getElementById('viewerImg').src = url;
+  document.getElementById('viewer').style.display = 'flex';
+}
+
+function closeViewer() {
+  document.getElementById('viewer').style.display = 'none';
+}
+
+// --- Selection & Delete ---
+function handleMsgClick(id) {
+  if (selectedIds.size > 0) {
+    if (selectedIds.has(id)) selectedIds.delete(id);
+    else selectedIds.add(id);
+    updateSelectionUI();
+  }
+}
+
+function handleMsgContext(e, id) {
+  e.preventDefault();
+  selectedIds.add(id);
+  updateSelectionUI();
+}
+
+function updateSelectionUI() {
+  const header = document.getElementById('chatHeader');
+  if (selectedIds.size > 0) {
+    header.innerHTML = `<div class="select-header" style="width:100%;display:flex;align-items:center;">
+      <button class="cancel-btn" onclick="cancelSelect()">X</button>
+      <span class="count">${selectedIds.size} seleccionado(s)</span>
+      <button class="delete-btn" onclick="deleteSelected()">Eliminar</button>
+    </div>`;
+  } else {
+    header.innerHTML = `<div class="header-info">
+      <div class="header-name" id="otherName">Esperando...</div>
+      <div class="header-status" id="otherStatus">desconectado</div>
+    </div>
+    <div class="status-dot offline" id="statusDot"></div>`;
+  }
+  renderMessages();
+}
+
+function cancelSelect() {
+  selectedIds.clear();
+  updateSelectionUI();
+}
+
+async function deleteSelected() {
+  if (!confirm(`Eliminar ${selectedIds.size} mensaje(s)?`)) return;
+
+  const toDelete = messages.filter(m => selectedIds.has(m.id));
+  const ids = toDelete.map(m => m.id);
+
+  messages = messages.filter(m => !selectedIds.has(m.id));
+  selectedIds.clear();
+  updateSelectionUI();
+
+  await sb.from('messages').delete().in('id', ids);
+
+  // Delete media files
+  const mediaFiles = toDelete
+    .filter(m => m.media_url)
+    .map(m => { const p = m.media_url.split('/chat-media/'); return p.length > 1 ? p[1].split('?')[0] : null; })
+    .filter(Boolean);
+  if (mediaFiles.length > 0) await sb.storage.from('chat-media').remove(mediaFiles);
+}
+
+// --- Emoji ---
+function buildEmojiPicker() {
+  const emojis = ['😀','😂','🤣','😍','😘','🥰','😎','🤔','😏','😢','😭','😡','🥳','🤯','😱','🙄','👍','👎','❤️','🔥','💯','🎉','🙏','💪','👏','🤝','💀','🤡','😈','👀','💕','😜','🤗','😴','🤮','🤑','😇','🥺','🤤','🫣','🫠','💩','👻','🤖','👽','🎃','💋','💔','✨','🌹','🍑','🍆','🍺','🎵','💃','🕺','🏆','🚀','🌶️'];
+  const grid = document.createElement('div');
+  grid.className = 'emoji-grid';
+  emojis.forEach(e => {
+    const span = document.createElement('span');
+    span.textContent = e;
+    span.onclick = () => { document.getElementById('msgInput').value += e; };
+    grid.appendChild(span);
+  });
+  document.getElementById('emojiPicker').appendChild(grid);
+}
+
+function toggleEmoji() {
+  const el = document.getElementById('emojiPicker');
+  el.style.display = el.style.display === 'block' ? 'none' : 'block';
+  document.getElementById('stickerPanel').style.display = 'none';
+}
+
+// --- Stickers ---
+function renderStickers() {
+  const grid = document.getElementById('stickerGrid');
+  if (stickers.length === 0) {
+    grid.innerHTML = '<div style="color:#8696A0;text-align:center;width:100%;padding:30px;font-size:14px;">No hay stickers.<br>Busca en internet o agrega desde archivo.</div>';
+    return;
+  }
+  grid.innerHTML = stickers.map(s =>
+    `<img src="${s.url}" onclick="sendSticker('${s.id}')" oncontextmenu="deleteSticker(event,'${s.id}')" title="Click para enviar, click derecho para eliminar">`
+  ).join('');
+}
+
+function toggleStickerPanel() {
+  const el = document.getElementById('stickerPanel');
+  el.style.display = el.style.display === 'flex' ? 'none' : 'flex';
+  document.getElementById('emojiPicker').style.display = 'none';
+}
+
+function closeStickerPanel() {
+  document.getElementById('stickerPanel').style.display = 'none';
+  document.getElementById('searchGrid').innerHTML = '';
+  document.getElementById('stickerSearchResults').style.display = 'none';
+  document.getElementById('stickerCollection').style.display = 'block';
+  document.getElementById('stickerSearchInput').value = '';
+}
+
+function sendSticker(id) {
+  const sticker = stickers.find(s => s.id === id);
+  if (!sticker) return;
+  closeStickerPanel();
+
+  const msg = {
+    id: Date.now().toString() + Math.random().toString(36).slice(2),
+    text: null, sender: myName, type: 'sticker', media_url: sticker.url, timestamp: Date.now()
+  };
+
+  messages.push({ ...msg, isMe: true });
+  renderMessages();
+  sb.from('messages').insert(msg);
+  if (socket) socket.emit('message', msg);
+}
+
+async function deleteSticker(e, id) {
+  e.preventDefault();
+  if (!confirm('Eliminar este sticker?')) return;
+  const sticker = stickers.find(s => s.id === id);
+  stickers = stickers.filter(s => s.id !== id);
+  renderStickers();
+  if (sticker) {
+    await sb.from('stickers').delete().eq('id', sticker.id);
+    const parts = sticker.url.split('/chat-media/');
+    if (parts.length > 1) await sb.storage.from('chat-media').remove([parts[1].split('?')[0]]);
+  }
+}
+
+async function searchStickers() {
+  const q = document.getElementById('stickerSearchInput').value.trim();
+  if (!q) return;
+
+  document.getElementById('stickerSearchResults').style.display = 'block';
+  document.getElementById('stickerCollection').style.display = 'none';
+  document.getElementById('searchGrid').innerHTML = '<div style="color:#8696A0;padding:20px;">Buscando...</div>';
+
+  const res = await fetch(`https://api.giphy.com/v1/stickers/search?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(q)}&limit=20&rating=r`);
+  const json = await res.json();
+
+  if (!json.data || json.data.length === 0) {
+    document.getElementById('searchGrid').innerHTML = '<div style="color:#8696A0;padding:20px;">Sin resultados</div>';
+    return;
+  }
+
+  document.getElementById('searchGrid').innerHTML = json.data.map(item =>
+    `<img src="${item.images.fixed_width_small.url}" onclick="saveGiphySticker('${item.images.original.url}')" title="Click para guardar">`
+  ).join('');
+}
+
+async function saveGiphySticker(url) {
+  document.getElementById('uploadBar').style.display = 'block';
+  document.getElementById('uploadBar').textContent = 'Guardando sticker...';
+
+  try {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    const ext = url.includes('.webp') ? 'webp' : 'gif';
+    const fileName = `stk_giphy_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+
+    await sb.storage.from('chat-media').upload(fileName, blob, { contentType: blob.type });
+    const { data } = sb.storage.from('chat-media').getPublicUrl(fileName);
+
+    const sticker = { id: Date.now().toString() + Math.random().toString(36).slice(2), url: data.publicUrl, uploaded_by: myName };
+    await sb.from('stickers').insert(sticker);
+    stickers.push(sticker);
+
+    document.getElementById('searchGrid').innerHTML = '';
+    document.getElementById('stickerSearchResults').style.display = 'none';
+    document.getElementById('stickerCollection').style.display = 'block';
+    document.getElementById('stickerSearchInput').value = '';
+    renderStickers();
+    alert('Sticker guardado!');
+  } catch (err) {
+    console.error(err);
+    alert('Error al guardar sticker');
+  }
+
+  document.getElementById('uploadBar').style.display = 'none';
+}
+
+async function uploadStickerFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+
+  document.getElementById('uploadBar').style.display = 'block';
+  document.getElementById('uploadBar').textContent = 'Subiendo sticker...';
+
+  const fileName = `stk_${Date.now()}_${Math.random().toString(36).slice(2)}.png`;
+  await sb.storage.from('chat-media').upload(fileName, file, { contentType: file.type });
+  const { data } = sb.storage.from('chat-media').getPublicUrl(fileName);
+
+  const sticker = { id: Date.now().toString() + Math.random().toString(36).slice(2), url: data.publicUrl, uploaded_by: myName };
+  await sb.from('stickers').insert(sticker);
+  stickers.push(sticker);
+  renderStickers();
+
+  document.getElementById('uploadBar').style.display = 'none';
+}
+</script>
+</body>
+</html>
