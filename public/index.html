@@ -252,7 +252,7 @@ function renderMessages() {
       content = `<img class="msg-img" src="${m.media_url}" onclick="openViewer('${m.media_url}')">`;
     } else if (m.type === 'audio' && m.media_url) {
       const bars = Array.from({length:16}, () => `<div class="bar" style="height:${6+Math.random()*14}px"></div>`).join('');
-      content = `<div class="msg-audio"><button onclick="playAudio('${m.id}','${m.media_url}')">&#9654;</button><div class="bars">${bars}</div></div>`;
+      content = `<div class="msg-audio"><button data-audio-id="${m.id}" data-audio-url="${encodeURIComponent(m.media_url)}" onclick="playAudioBtn(this)">&#9654;</button><div class="bars">${bars}</div></div>`;
     } else {
       content = `<div class="msg-text">${escapeHtml(m.text || '')}</div>`;
     }
@@ -332,18 +332,24 @@ async function uploadImage(input) {
 }
 
 // --- Audio playback ---
-function playAudio(msgId, url) {
+function playAudioBtn(btn) {
+  event.stopPropagation();
+  const msgId = btn.getAttribute('data-audio-id');
+  const url = decodeURIComponent(btn.getAttribute('data-audio-url'));
+
   if (currentAudioId === msgId && currentAudio) {
     currentAudio.pause();
     currentAudio = null;
     currentAudioId = null;
+    btn.innerHTML = '&#9654;';
     return;
   }
   if (currentAudio) currentAudio.pause();
   currentAudio = new Audio(url);
   currentAudioId = msgId;
-  currentAudio.play();
-  currentAudio.onended = () => { currentAudio = null; currentAudioId = null; };
+  btn.innerHTML = '&#10074;&#10074;';
+  currentAudio.play().catch(e => { console.error('Audio error:', e); alert('No se pudo reproducir el audio'); });
+  currentAudio.onended = () => { currentAudio = null; currentAudioId = null; btn.innerHTML = '&#9654;'; };
 }
 
 // --- Image viewer ---
