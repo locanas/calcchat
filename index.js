@@ -1,7 +1,42 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { Server } = require('socket.io');
+
+// --- Presencia: registra la ultima conexion en Supabase (funciona para app Y web) ---
+const SUPABASE_URL =
+  process.env.SUPABASE_URL || 'https://nsydgcsszificogtalxv.supabase.co';
+const SUPABASE_ANON_KEY =
+  process.env.SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5zeWRnY3NzemlmaWNvZ3RhbHh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4NzU5MTEsImV4cCI6MjA5NjQ1MTkxMX0.CL9cGdUtqjNjgy_yYGUoclwVQj69myZ_dCLfKu9-esc';
+
+function recordPresence(userName) {
+  if (!userName) return;
+  const body = JSON.stringify({ user_name: userName, last_seen: Date.now() });
+  const url = new URL('/rest/v1/presence', SUPABASE_URL);
+  const req = https.request(
+    {
+      method: 'POST',
+      hostname: url.hostname,
+      path: url.pathname,
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    },
+    (res) => {
+      res.on('data', () => {});
+      res.on('end', () => {});
+    }
+  );
+  req.on('error', (e) => console.error('presence error:', e.message));
+  req.write(body);
+  req.end();
+}
 
 const MIME = {
   '.html': 'text/html',
@@ -73,6 +108,9 @@ io.on('connection', (socket) => {
     users.set(socket.id, { name: userName, typing: false });
     console.log(`Registered: ${userName} (${socket.id})`);
 
+    // Guarda la hora de entrada (app o web) para la "ultima conexion"
+    recordPresence(userName);
+
     // Notify this user about who else is online
     for (const [id, user] of users) {
       if (id !== socket.id) {
@@ -126,6 +164,8 @@ io.on('connection', (socket) => {
     const user = users.get(socket.id);
     if (user) {
       console.log(`Disconnected: ${user.name}`);
+      // Guarda la hora de salida como ultima conexion (app o web)
+      recordPresence(user.name);
       socket.broadcast.emit('user-status', { name: user.name, online: false });
       users.delete(socket.id);
     }
