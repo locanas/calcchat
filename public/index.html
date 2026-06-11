@@ -31,6 +31,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .online { background:#00A884; }
 .offline { background:#8696A0; }
 
+/* Presence bar (ultima conexion) */
+.presence-bar { background:#15202B; padding:6px 16px; border-bottom:1px solid #2A3942; display:flex; flex-direction:column; gap:3px; }
+.presence-row { font-size:12px; color:#8696A0; display:flex; align-items:center; gap:8px; }
+.presence-row b { color:#E9EDEF; font-weight:600; }
+.pdot { width:8px; height:8px; border-radius:50%; flex-shrink:0; display:inline-block; }
+.pdot.online { background:#00A884; }
+.pdot.offline { background:#8696A0; }
+
 /* Messages */
 .messages { flex:1; overflow-y:auto; padding:12px 60px; display:flex; flex-direction:column; gap:2px; }
 .msg { max-width:65%; padding:8px 12px 4px; border-radius:8px; position:relative; word-wrap:break-word; }
@@ -117,6 +125,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
     <div class="status-dot offline" id="statusDot"></div>
   </div>
 
+  <div class="presence-bar" id="presenceBar">
+    <div class="presence-row" id="presenceOther"><span class="pdot offline"></span>Cargando...</div>
+    <div class="presence-row" id="presenceMe"></div>
+  </div>
+
   <div class="messages" id="messages"></div>
 
   <div class="uploading" id="uploadBar">Subiendo...</div>
@@ -175,6 +188,9 @@ let stickers = [];
 let typingTimeout = null;
 let currentAudio = null;
 let currentAudioId = null;
+let otherName = '';
+let otherOnline = false;
+let presenceTimer = null;
 
 // --- Login ---
 async function handleLogin() {
@@ -216,10 +232,15 @@ async function initChat() {
   });
 
   socket.on('user-status', (data) => {
-    document.getElementById('otherName').textContent = data.name;
-    document.getElementById('otherStatus').textContent = data.online ? 'en linea' : 'desconectado';
+    otherName = data.name;
+    otherOnline = data.online;
+    const nameEl = document.getElementById('otherName');
+    const statusEl = document.getElementById('otherStatus');
+    if (nameEl) nameEl.textContent = data.name;
+    if (statusEl) statusEl.textContent = data.online ? 'en linea' : 'desconectado';
     const dot = document.getElementById('statusDot');
-    dot.className = 'status-dot ' + (data.online ? 'online' : 'offline');
+    if (dot) dot.className = 'status-dot ' + (data.online ? 'online' : 'offline');
+    refreshPresence();
   });
 
   socket.on('typing', (data) => {
@@ -228,6 +249,91 @@ async function initChat() {
 
   // Emoji picker
   buildEmojiPicker();
+
+  // Presencia / ultima conexion
+  startPresence();
+}
+
+// --- Presencia (ultima conexion) ---
+function startPresence() {
+  heartbeat();        // registra mi conexion ahora
+  refreshPresence();  // carga y muestra ambos
+
+  if (presenceTimer) clearInterval(presenceTimer);
+  presenceTimer = setInterval(() => { heartbeat(); refreshPresence(); }, 30000);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { heartbeat(); refreshPresence(); }
+  });
+  window.addEventListener('beforeunload', heartbeat);
+}
+
+async function heartbeat() {
+  if (!myName) return;
+  // Solo marco "conectado" mientras la pestaña esta visible
+  if (typeof document.visibilityState === 'string' && document.visibilityState !== 'visible') return;
+  try {
+    await sb.from('presence').upsert(
+      { user_name: myName, last_seen: Date.now() },
+      { onConflict: 'user_name' }
+    );
+  } catch (e) { console.error('presence upsert:', e); }
+}
+
+async function refreshPresence() {
+  let rows = [];
+  try {
+    const { data } = await sb.from('presence').select('*');
+    rows = data || [];
+  } catch (e) { console.error('presence load:', e); }
+  renderPresence(rows);
+}
+
+function renderPresence(rows) {
+  rows = rows || [];
+  const byName = {};
+  rows.forEach(r => { byName[r.user_name] = r.last_seen; });
+
+  // Si aun no se quien es el otro, lo deduzco de la presencia o de los mensajes
+  if (!otherName) {
+    const r = rows.find(x => x.user_name !== myName);
+    if (r) otherName = r.user_name;
+    else {
+      const m = messages.find(mm => mm.sender && mm.sender !== myName);
+      if (m) otherName = m.sender;
+    }
+  }
+
+  const otherEl = document.getElementById('presenceOther');
+  const meEl = document.getElementById('presenceMe');
+
+  if (otherEl) {
+    if (otherName) {
+      const txt = otherOnline
+        ? 'en linea ahora'
+        : 'ultima conexion: ' + formatLastSeen(byName[otherName]);
+      otherEl.innerHTML = `<span class="pdot ${otherOnline ? 'online' : 'offline'}"></span><b>${escapeHtml(otherName)}</b> &mdash; ${txt}`;
+    } else {
+      otherEl.innerHTML = `<span class="pdot offline"></span>Esperando al otro usuario...`;
+    }
+  }
+
+  if (meEl) {
+    meEl.innerHTML = `<span class="pdot online"></span><b>${escapeHtml(myName)} (tu)</b> &mdash; en linea ahora`;
+  }
+}
+
+function formatLastSeen(ts) {
+  if (!ts) return 'sin registro';
+  const d = new Date(Number(ts));
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === now.toDateString()) return `hoy ${time}`;
+  if (d.toDateString() === yesterday.toDateString()) return `ayer ${time}`;
+  const date = d.toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  return `${date} ${time}`;
 }
 
 // --- Messages ---
