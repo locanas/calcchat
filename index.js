@@ -38,6 +38,124 @@ function recordPresence(userName) {
   req.end();
 }
 
+// --- Notificaciones "clima": avisa a la otra persona (conexion o mensaje)
+// disfrazado como el clima REAL de Apodaca, N.L. (Open-Meteo, sin API key) ---
+const APODACA = { lat: 25.7817, lon: -100.1886 };
+const WEATHER_TTL = 10 * 60 * 1000; // cachear el clima 10 min
+const NOTIFY_MIN_MS = 40 * 1000; // throttle por persona para no saturar
+let weatherCache = { text: null, at: 0 };
+const notifyThrottle = new Map(); // actorName -> ultimo push (ms)
+
+const WMO = {
+  0: 'Cielo despejado', 1: 'Mayormente despejado', 2: 'Parcialmente nublado',
+  3: 'Nublado', 45: 'Niebla', 48: 'Niebla', 51: 'Llovizna ligera',
+  53: 'Llovizna', 55: 'Llovizna intensa', 56: 'Llovizna helada',
+  57: 'Llovizna helada', 61: 'Lluvia ligera', 63: 'Lluvia', 65: 'Lluvia fuerte',
+  66: 'Lluvia helada', 67: 'Lluvia helada', 71: 'Nieve ligera', 73: 'Nieve',
+  75: 'Nieve intensa', 77: 'Aguanieve', 80: 'Chubascos', 81: 'Chubascos',
+  82: 'Chubascos fuertes', 85: 'Chubascos de nieve', 86: 'Chubascos de nieve',
+  95: 'Tormenta', 96: 'Tormenta con granizo', 99: 'Tormenta con granizo',
+};
+
+function getWeather(cb) {
+  const now = Date.now();
+  if (weatherCache.text && now - weatherCache.at < WEATHER_TTL) {
+    return cb(weatherCache.text);
+  }
+  const url =
+    `https://api.open-meteo.com/v1/forecast?latitude=${APODACA.lat}` +
+    `&longitude=${APODACA.lon}&current=temperature_2m,weather_code` +
+    `&timezone=America/Monterrey`;
+  https
+    .get(url, (res) => {
+      let d = '';
+      res.on('data', (c) => (d += c));
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(d);
+          const t = Math.round(j.current.temperature_2m);
+          const desc = WMO[j.current.weather_code] || 'Despejado';
+          weatherCache = { text: `${t}° · ${desc}`, at: now };
+        } catch (e) {
+          /* usa lo que haya en cache */
+        }
+        cb(weatherCache.text || '24° · Despejado');
+      });
+    })
+    .on('error', () => cb(weatherCache.text || '24° · Despejado'));
+}
+
+function sendExpoPush(token, body) {
+  const payload = JSON.stringify({
+    to: token,
+    title: 'El tiempo en Apodaca',
+    body,
+    sound: null,
+    channelId: 'clima',
+    priority: 'high',
+  });
+  const req = https.request(
+    {
+      method: 'POST',
+      hostname: 'exp.host',
+      path: '/--/api/v2/push/send',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    },
+    (res) => {
+      res.on('data', () => {});
+      res.on('end', () => {});
+    }
+  );
+  req.on('error', (e) => console.error('push error:', e.message));
+  req.write(payload);
+  req.end();
+}
+
+// Envia el "clima" a la otra persona (todos los tokens salvo el que hizo la accion)
+function notifyOther(actorName) {
+  if (!actorName) return;
+  const now = Date.now();
+  if (now - (notifyThrottle.get(actorName) || 0) < NOTIFY_MIN_MS) return;
+  notifyThrottle.set(actorName, now);
+
+  const url = new URL('/rest/v1/push_tokens?select=user_name,token', SUPABASE_URL);
+  https
+    .get(
+      {
+        hostname: url.hostname,
+        path: url.pathname + url.search,
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+      },
+      (res) => {
+        let d = '';
+        res.on('data', (c) => (d += c));
+        res.on('end', () => {
+          let rows = [];
+          try {
+            rows = JSON.parse(d);
+          } catch (e) {
+            return;
+          }
+          // Si la tabla aun no existe, Supabase devuelve un objeto de error
+          if (!Array.isArray(rows)) return;
+          const targets = rows.filter(
+            (r) => r.user_name !== actorName && r.token
+          );
+          if (!targets.length) return;
+          getWeather((body) => targets.forEach((r) => sendExpoPush(r.token, body)));
+        });
+      }
+    )
+    .on('error', (e) => console.error('token fetch error:', e.message));
+}
+
 const MIME = {
   '.html': 'text/html',
   '.css': 'text/css',
@@ -111,6 +229,9 @@ io.on('connection', (socket) => {
     // Guarda la hora de entrada (app o web) para la "ultima conexion"
     recordPresence(userName);
 
+    // Avisa a la otra persona (disfrazado del clima) que este usuario entro
+    notifyOther(userName);
+
     // Notify this user about who else is online
     for (const [id, user] of users) {
       if (id !== socket.id) {
@@ -132,6 +253,8 @@ io.on('connection', (socket) => {
       media_url: data.media_url || null,
       timestamp: data.timestamp,
     });
+    // Avisa a la otra persona (disfrazado del clima) que llego un mensaje
+    notifyOther(data.sender);
   });
 
   // Typing indicator
